@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\AWSSQS.cpp" />
     <ClCompile Include="src\config.cpp" />
     <ClCompile Include="src\Logger.cpp" />
     <ClCompile Include="src\main.cpp" />
@@ -26,6 +27,7 @@
     <ClCompile Include="src\TFTP.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\AWSSQS.h" />
     <ClInclude Include="src\config.h" />
     <ClInclude Include="src\Logger.h" />
     <ClInclude Include="src\pthread_win.h" />
@@ -130,7 +132,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DISABLE_SQS_MODULE;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>

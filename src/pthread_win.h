@@ -43,6 +43,9 @@
 	#include <sys/socket.h>
 	#include <sys/types.h>
 	#include <netinet/in.h>
+	#include <ifaddrs.h>
+	#include <netinet/in.h>
+	#include <openssl/md5.h>
 	#include <string.h>
 	#include <stdio.h>
 	#include <cstdlib>
@@ -68,6 +71,13 @@
 	#define vsprintf_s(dst,formt,vl) vsnprintf(dst,sizeof(dst),formt,vl)
 	#define sprintf_s snprintf
 	#define localtime_s localtime_r
+	#ifndef SOCKET
+		#define SOCKET  int
+	#endif
 #endif
+
+	// There are external libs to generate this, but our project requirement was to use minimal external dependencies
+	char* base64_encode(const unsigned char* data, size_t input_length, size_t* output_length);
+	void create_guid(char* guid, int maxSize);
 
 #endif // Header end

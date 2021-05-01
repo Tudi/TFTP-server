@@ -1,6 +1,6 @@
 #include "TFTP.h"
 #include <list>
-
+#include "AWSSQS.h"
 #include "config.h"
 #include "Logger.h"
 
@@ -17,12 +17,12 @@ volatile int TransferCounter = 0;
 // Sometimes new session requests may come as duplicats. Need to filter out Duplicats
 struct sockaddr **ActiveClientList = NULL;
 
-int CreateUDPSocket(int *sockfd, unsigned short port)
+int CreateUDPSocket(SOCKET *sockfd, unsigned short port)
 {
 	struct sockaddr_in server;
 	int err;
 	*sockfd = socket( AF_INET, SOCK_DGRAM, 0);
-	if(*sockfd == INVALID_SOCKET)
+	if(*sockfd == INVALID_SOCKET_2)
 	{
 		// could not create socket
 		LOG_ERROR("Could not create socket\n");
@@ -50,6 +50,9 @@ int CreateUDPSocket(int *sockfd, unsigned short port)
 	if (err != 0)
 	{
 		LOG_ERROR("Socket error %d while binding to port %d\n", err, port);
+#ifndef WIN32
+		LOG_ERROR("Bind error message : %s\n", explain_bind(*sockfd, (struct sockaddr*)&server, sizeof(server)));
+#endif
 	}
 
 	LOG_TRACE("Created socket to listen on %d\n", port);
@@ -60,15 +63,15 @@ int CreateUDPSocket(int *sockfd, unsigned short port)
 int CreateCommUDPSocket(TFTPSession *sess)
 {
 	struct sockaddr_in server;
-	int* sockfd = &sess->CommSocket;
+	SOCKET* sockfd = &sess->CommSocket;
 	int err;
 	int RetryCount = 0;
 
 	// Do we reuse server listen socket for communication ?
-	if (sess->ServerSocket != INVALID_SOCKET)
+	if (sess->ServerSocket != INVALID_SOCKET_2)
 	{
 		sess->CommSocket = sess->ServerSocket;
-		sess->ServerSocket = INVALID_SOCKET;
+		sess->ServerSocket = INVALID_SOCKET_2;
 
 		LOG_TRACE("Going to reuse server port to comm with client\n");
 		err = connect(sess->CommSocket, (struct sockaddr*)&sess->Client, sizeof(sess->Client));
@@ -84,7 +87,7 @@ int CreateCommUDPSocket(TFTPSession *sess)
 	do {
 
 		*sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-		if (*sockfd == INVALID_SOCKET)
+		if (*sockfd == INVALID_SOCKET_2)
 		{
 			// could not create socket
 			LOG_ERROR("Could not create socket\n");
@@ -107,6 +110,9 @@ int CreateCommUDPSocket(TFTPSession *sess)
 		err = bind(*sockfd, (struct sockaddr*)&server, sizeof(server));
 		if (err != 0)
 		{
+#ifndef WIN32
+			LOG_ERROR("Bind error message : %s\n", explain_bind(*sockfd, (struct sockaddr*)&server, sizeof(server)));
+#endif
 			closesocket(*sockfd);
 		}
 		else if(sess->Client.sa_family != AF_MAX) // We do not need to connect connection listener socket
@@ -170,8 +176,11 @@ void* ThreadDirectComm(void* pThreadArgs)
 			int err = ParsePacket(sess->LastRecvPacket, sess->LastRecvPktSize, sess);
 		}
 
+		// callback to AWS backend
+		AWS_SQS_OnPacketArrived(sess->LastRecvPacket, sess->LastRecvPktSize, sess->CommSocket, (struct sockaddr_in* )&sess->Client);
+
 		// Nothing to do without a valid comm channel
-		if (sess->CommSocket == INVALID_SOCKET)
+		if (sess->CommSocket == INVALID_SOCKET_2)
 		{
 			break;
 		}
@@ -267,7 +276,7 @@ void RunTFTPServer(unsigned short port)
 	}
 
 	// Create an UDP socket we will listen on
-	int sockfd;
+	SOCKET sockfd;
 	CreateUDPSocket(&sockfd, port);
 
 	// Loop while transmitting
@@ -310,6 +319,7 @@ void RunTFTPServer(unsigned short port)
 	free(ActiveClientList);
 	ActiveClientList = NULL;
 	closesocket(sockfd);
+	AWS_SQS_SessionClose(sockfd);
 }
 
 #define EnsureHaveEnoughPacketBytes(packetSize, needSize, sess) { \
@@ -361,7 +371,7 @@ int ParsePacket(char* packet, int size, TFTPSession* sess)
 	return 0;
 }
 
-int ParseOptions(TFTPSession* sess, char *packet, int size, int & bytesRead)
+int ParseOptions(TFTPSession* sess, char *packet, int size, size_t & bytesRead)
 {
 	// Parse options ( if there are any )
 	char OackContent[TFTP_PACKET_FULL_SIZE_SAFE];
@@ -370,11 +380,11 @@ int ParseOptions(TFTPSession* sess, char *packet, int size, int & bytesRead)
 	{
 		EnsureHaveEnoughPacketBytes(size, bytesRead + 1, sess)
 		const char* OptionName = &packet[bytesRead];
-		bytesRead += strlen(OptionName) + 1;
+		bytesRead += (int)strlen(OptionName) + 1;
 
 		EnsureHaveEnoughPacketBytes(size, bytesRead + 1, sess)
 		const char* OptionValue = &packet[bytesRead];
-		bytesRead += strlen(OptionValue) + 1;
+		bytesRead += (int)strlen(OptionValue) + 1;
 
 		LOG_TRACE("option %s=%s from IP %s:%d\n", OptionName, OptionValue, inet_ntoa(((struct sockaddr_in*)&sess->Client)->sin_addr), ((struct sockaddr_in*)&sess->Client)->sin_port);
 
@@ -476,10 +486,11 @@ TFTPSession::~TFTPSession()
 	}
 
 	// Close comm socket
-	if (CommSocket != INVALID_SOCKET)
+	if (CommSocket != INVALID_SOCKET_2)
 	{
+		AWS_SQS_SessionClose(CommSocket);
 		closesocket(CommSocket);
-		CommSocket = INVALID_SOCKET;
+		CommSocket = INVALID_SOCKET_2;
 	}
 
 	if (BlockNrInWindowReceived != NULL)
@@ -495,7 +506,7 @@ void SMSG_ACK_Block(TFTPSession* sess, int Resend)
 	int BlocksReceived = 0;
 	for (int i = 0; i < sess->WindowSize; i++)
 	{
-		if (sess->BlockNrInWindowReceived[i] == sess->BlockSize)
+		if (sess->BlockNrInWindowReceived[i] > 0)
 		{
 			BlocksReceived++;
 			continue;
@@ -571,7 +582,7 @@ void SMSG_DATA(TFTPSession* sess, int resend)
 	{
 
 		// Read bytes from file
-		int read_count_now = fread(&packet[TFTP_HEADER_SIZE], 1, sess->BlockSize, sess->hFile);
+		size_t read_count_now = fread(&packet[TFTP_HEADER_SIZE], 1, sess->BlockSize, sess->hFile);
 
 		// End of file reached
 		if (read_count_now < sess->BlockSize)
@@ -585,8 +596,8 @@ void SMSG_DATA(TFTPSession* sess, int resend)
 		*(unsigned short*)&packet[2] = htons(sess->FirstBlockInWindow + i);
 
 		// Send block of data
-		int ThisPacketSize = read_count_now + TFTP_HEADER_SIZE;
-		int BytesSent = send(sess->CommSocket, &packet[0], ThisPacketSize, 0);
+		size_t ThisPacketSize = read_count_now + TFTP_HEADER_SIZE;
+		int BytesSent = send(sess->CommSocket, &packet[0], (int)ThisPacketSize, 0);
 
 		// Unexpected disconnection
 		if (BytesSent != ThisPacketSize)
@@ -662,7 +673,7 @@ void SMSG_Error(TFTPSession* sess)
 	packet_size = i + 1;
 
 	// Sends error packet to client, then terminates
-	int BytesSent = send(sess->CommSocket, packet, packet_size, 0);
+	size_t BytesSent = send(sess->CommSocket, packet, (int)packet_size, 0);
 	if (BytesSent != packet_size)
 	{
 		LOG_ERROR("only managed to send %d bytes out of %d\n", BytesSent, packet_size);
@@ -676,7 +687,7 @@ void SMSG_Error(TFTPSession* sess)
 
 int CMSG_RRQ(char* packet, int size, TFTPSession* sess)
 {
-	int bytesRead = 2; // 2 bytes are the opcode we already read
+	size_t bytesRead = 2; // 2 bytes are the opcode we already read
 
 	LOG_TRACE("Client sent us a RRQ from IP %s:%d\n", inet_ntoa(((struct sockaddr_in*)&sess->Client)->sin_addr), ((struct sockaddr_in*)&sess->Client)->sin_port);
 
@@ -815,7 +826,7 @@ int CMSG_ACK(char* packet, int size, TFTPSession* sess)
 
 int CMSG_ERROR(char* packet, int size, TFTPSession* sess)
 {
-	int bytesRead = 2; // 2 bytes are the opcode we already read
+	size_t bytesRead = 2; // 2 bytes are the opcode we already read
 
 	EnsureHaveEnoughPacketBytes(size, bytesRead + 2, sess)
 
@@ -841,7 +852,7 @@ int CMSG_ERROR(char* packet, int size, TFTPSession* sess)
 
 int CMSG_WRQ(char* packet, int size, TFTPSession* sess)
 {
-	int bytesRead = 2; // 2 bytes are the opcode we already read
+	size_t bytesRead = 2; // 2 bytes are the opcode we already read
 
 	// Starting a new s->c session
 	if (sess->SelectedOperation != TFTP_OP_NOT_INITIALIZED)

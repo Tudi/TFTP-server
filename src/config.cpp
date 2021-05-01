@@ -5,14 +5,15 @@
 #include "pthread_win.h" // contains linux specific declarations
 #endif
 #include "config.h"
+#include "Logger.h"
 
 AppConfig sConf;
 
 
-int chrpos(const char* str, const char c)
+int chrpos(const char* str, const char c, int MaxLen)
 {
 	int i = 0;
-	while (str[i] != 0)
+	while (str[i] != 0 && i < MaxLen)
 	{
 		if (str[i] == c)
 			return i;
@@ -22,10 +23,10 @@ int chrpos(const char* str, const char c)
 	return -1;
 }
 
-int strcmp2(const char* s1, const char* s2)
+int strcmp2(const char* s1, const char* s2, int MaxLen)
 {
 	int i = 0;
-	while (s1[i] == s2[i] && s2[i] != 0 && s1[i] != 0)
+	while (s1[i] == s2[i] && s2[i] != 0 && s1[i] != 0 && i < MaxLen)
 		i++;
 	//did we found the whole s2 ?
 	if (s2[i] == 0)
@@ -33,10 +34,10 @@ int strcmp2(const char* s1, const char* s2)
 	return 1;
 }
 
-void RemoveEOL(char* s)
+void RemoveEOL(char* s, int MaxLen)
 {
 	int i = 0;
-	while (s[i] != 0)
+	while (s[i] != 0 && i < MaxLen)
 	{
 		if (s[i] == '\n' || s[i] == '\r')
 			s[i] = 0;
@@ -49,19 +50,22 @@ int GenericStrLoader(const char* Filename, const char* ConfName, char* Store, in
 	FILE* f;
 	errno_t er = fopen_s(&f, Filename, "rt");
 	if (f == NULL)
+	{
+		LOG_ERROR("Could not open file %s to read option %s\n", Filename, ConfName);
 		return 1;
+	}
 	while (!feof(f))
 	{
 		char ConfigFileLine[1500];
 		char* ret = fgets(ConfigFileLine, sizeof(ConfigFileLine), f);
-		if (ret && strcmp2(ConfigFileLine, ConfName) == 0)
+		if (ret && strcmp2(ConfigFileLine, ConfName, sizeof(ConfigFileLine)) == 0)
 		{
-			int strposI = chrpos(ConfigFileLine, '=');
+			int strposI = chrpos(ConfigFileLine, '=', sizeof(ConfigFileLine));
 			if (strposI > 0)
 			{
 				fclose(f);
 				strcpy_s(Store, MaxStore, &ConfigFileLine[strposI + 1]);
-				RemoveEOL(Store);
+				RemoveEOL(Store, sizeof(ConfigFileLine));
 				return 0;
 			}
 		}
@@ -78,6 +82,7 @@ int GetIntConfig(const char* Filename, const char* ConfName, int* Store)
 	if (ret != 0)
 		return ret;
 	*Store = atoi(ConfigFileValue);
+	LOG_TRACE("From %s loaded %s=%d\n", Filename, ConfName, *Store);
 	return 0;
 }
 
@@ -93,6 +98,7 @@ int GetFloatConfig(const char* Filename, const char* ConfName, float* Store)
 	if (ret != 0)
 		return ret;
 	*Store = (float)atof(ConfigFileValue);
+	LOG_TRACE("From %s loaded %s=%f\n", Filename, ConfName, *Store);
 	return 0;
 }
 
@@ -101,18 +107,22 @@ int LoadMultiLineValue(const char* Filename, const char* ConfName, std::list<cha
 	FILE* f;
 	errno_t er = fopen_s(&f, Filename, "rt");
 	if (f == NULL)
+	{
+		LOG_ERROR("Could not open file %s to read option %s\n", Filename, ConfName);
 		return 1;
+	}
 	while (!feof(f))
 	{
 		char ConfigFileLine[1500];
 		char* ret = fgets(ConfigFileLine, sizeof(ConfigFileLine), f);
-		if (ret && strcmp2(ConfigFileLine, ConfName) == 0)
+		if (ret && strcmp2(ConfigFileLine, ConfName, sizeof(ConfigFileLine)) == 0)
 		{
-			int strposI = chrpos(ConfigFileLine, '=');
+			int strposI = chrpos(ConfigFileLine, '=', sizeof(ConfigFileLine));
 			if (strposI > 0)
 			{
-				RemoveEOL(&ConfigFileLine[strposI + 1]);
+				RemoveEOL(&ConfigFileLine[strposI + 1], sizeof(ConfigFileLine));
 				store.push_back(_strdup(&ConfigFileLine[strposI + 1]));
+				LOG_TRACE("From %s loaded %s=%s\n", Filename, ConfName, &ConfigFileLine[strposI + 1]);
 			}
 		}
 	}
@@ -122,6 +132,10 @@ int LoadMultiLineValue(const char* Filename, const char* ConfName, std::list<cha
 
 void InitConfig()
 {
+	int logSeverityFlags = 0;
+	GetIntConfig("init.cfg", "LogVerbosityFlags", &logSeverityFlags);
+	sLogger.SetLogLevelFlags((LogSeverityFlags)logSeverityFlags);
+
 	GetIntConfig("init.cfg", "RetryResendPacketMax", &sConf.RetryResendPacketMax);
 	GetIntConfig("init.cfg", "ParallelTransfersMax", &sConf.ParallelTransfersMax);
 	GetIntConfig("init.cfg", "CommPortRangeStart", &sConf.CommPortStart);

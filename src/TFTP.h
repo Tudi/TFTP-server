@@ -12,12 +12,15 @@
 	#include <sys/socket.h>
 	#include <sys/types.h>
 	#include <netinet/in.h>
+	#include <libexplain/bind.h>
 	#include <string.h>
 	#include <stdio.h>
 	#include <stdlib.h>
 	#include <ctype.h>
 	#include "pthread_win.h"
 #endif
+
+#define INVALID_SOCKET_2			-1
 
 #define TFTP_HEADER_SIZE			4
 #define TFTP_DATA_BLOCK_SIZE		512
@@ -103,7 +106,7 @@ public:
 	// Unless a full packet is sent/received, we can consider the stream finished
 //	int LastSentPktSize = 0;
 	// When server receives a "large" file, he should do it on a separate port
-	int CommSocket = INVALID_SOCKET;
+	SOCKET CommSocket = INVALID_SOCKET_2;
 	// Options might ask us to use specific port for communication, check if we can respect it
 	unsigned short PortPrefered = 0;
 	// When file read is done, we can set this to 1
@@ -121,7 +124,7 @@ public:
 	// We can ACK a window if all blocks got received within it( or transfer is done 
 	int* BlockNrInWindowReceived = NULL;
 	// Only valid if we want to use server listen port as comm port
-	int ServerSocket = INVALID_SOCKET;
+	SOCKET ServerSocket = INVALID_SOCKET_2;
 };
 
 /*
